@@ -1,0 +1,14 @@
+# Dependências do Mini-Projeto 1
+pandas
+nltk
+
+# Dependências do Mini-Projeto 2
+fastapi
+uvicorn
+starlette
+
+# --- Ações Pós-Instalação ---
+# O NLTK precisa baixar recursos de linguagem (como a lista de stopwords) separadamente.
+# Após instalar as dependências acima com 'pip install -r requirements.txt',
+# execute o comando a seguir para finalizar a configuração do NLP:
+# python -c "import nltk; nltk.download('stopwords')"

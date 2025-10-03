@@ -1,0 +1,65 @@
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Conversor de Temperatura</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        label, input, button { margin-bottom: 10px; display: block; }
+        #resultado { margin-top: 20px; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>Conversor de F° para C°</h1>
+
+    <label for="fahrenheit">Temperatura em Fahrenheit (F°):</label>
+    <input type="number" id="fahrenheit" value="68">
+
+    <button onclick="converter()">Converter</button>
+
+    <h2>Resultado:</h2>
+    <div id="resultado">Aguardando conversão...</div>
+
+    <script>
+        async function converter() {
+            // 1. Pega o valor digitado pelo usuário
+            const fahrenheitInput = document.getElementById('fahrenheit');
+            const tempF = fahrenheitInput.value;
+            const resultadoDiv = document.getElementById('resultado');
+
+            if (!tempF || isNaN(tempF)) {
+                resultadoDiv.textContent = "Por favor, insira uma temperatura válida.";
+                return;
+            }
+
+            // 2. Define a URL da API, incluindo o parâmetro (Query Parameter)
+            const apiUrl = `http://127.0.0.1:8000/converter?temp_f=${tempF}`;
+
+            try {
+                resultadoDiv.textContent = "Convertendo...";
+                
+                // 3. Faz a requisição HTTP (usando fetch)
+                const response = await fetch(apiUrl);
+                
+                // 4. Converte a resposta JSON em um objeto JavaScript
+                const dados = await response.json();
+
+                // 5. Verifica se a API retornou um erro
+                if (!response.ok) {
+                    resultadoDiv.textContent = `Erro do Servidor: ${dados.detail}`;
+                    return;
+                }
+
+                // 6. Exibe o resultado na tela
+                const celsius = dados.temperatura_celsius;
+                resultadoDiv.textContent = `Resultado: ${celsius} C°`;
+
+            } catch (error) {
+                // Captura erros de rede (ex: servidor Python não está rodando)
+                resultadoDiv.textContent = 'Erro ao conectar com a API. Verifique se o Uvicorn está rodando.';
+                console.error('Erro de requisição:', error);
+            }
+        }
+    </script>
+</body>
+</html>
