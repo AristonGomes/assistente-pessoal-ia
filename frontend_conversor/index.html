@@ -1,65 +1,126 @@
+<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Conversor de Temperatura</title>
+    <title>Assistente Pessoal (NLP)</title>
     <style>
-        body { font-family: Arial, sans-serif; padding: 20px; }
-        label, input, button { margin-bottom: 10px; display: block; }
-        #resultado { margin-top: 20px; font-weight: bold; }
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            margin: 0; 
+            padding: 20px; 
+            background-color: #f4f7f6;
+        }
+        .chat-container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #fff;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+        }
+        h1 { 
+            text-align: center; 
+            color: #1a73e8; 
+            margin-bottom: 30px; 
+        }
+        #chat-historico {
+            min-height: 250px;
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+            background-color: #e9ecef;
+        }
+        textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            box-sizing: border-box;
+            resize: vertical;
+            min-height: 60px;
+        }
+        button {
+            width: 100%;
+            padding: 10px;
+            background-color: #1a73e8;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #1558b3;
+        }
+        .mensagem { margin-bottom: 10px; padding: 8px; border-radius: 5px; }
+        .usuario { background-color: #d1e7dd; text-align: right; } /* Verde claro */
+        .assistente { background-color: #cfe2ff; text-align: left; } /* Azul claro */
     </style>
 </head>
 <body>
-    <h1>Conversor de F° para C°</h1>
+    <div class="chat-container">
+        <h1>Seu Assistente Pessoal (NLP)</h1>
 
-    <label for="fahrenheit">Temperatura em Fahrenheit (F°):</label>
-    <input type="number" id="fahrenheit" value="68">
+        <div id="chat-historico">
+            <div class="mensagem assistente">Olá! Sou seu assistente pessoal. O que posso fazer por você?</div>
+        </div>
 
-    <button onclick="converter()">Converter</button>
+        <textarea id="input-usuario" placeholder="Digite aqui (ex: limpe esta frase, converta 72F, etc.)"></textarea>
+        <button onclick="enviarMensagem()">Enviar</button>
+    </div>
 
-    <h2>Resultado:</h2>
-    <div id="resultado">Aguardando conversão...</div>
+<script>
+    const API_URL = "http://127.0.0.1:8000/assistente";
 
-    <script>
-        async function converter() {
-            // 1. Pega o valor digitado pelo usuário
-            const fahrenheitInput = document.getElementById('fahrenheit');
-            const tempF = fahrenheitInput.value;
-            const resultadoDiv = document.getElementById('resultado');
+    async function enviarMensagem() {
+        const input = document.getElementById("input-usuario");
+        const historico = document.getElementById("chat-historico");
+        const mensagem = input.value.trim();
 
-            if (!tempF || isNaN(tempF)) {
-                resultadoDiv.textContent = "Por favor, insira uma temperatura válida.";
-                return;
-            }
+        if (mensagem === "") return;
 
-            // 2. Define a URL da API, incluindo o parâmetro (Query Parameter)
-            const apiUrl = `http://127.0.0.1:8000/converter?temp_f=${tempF}`;
+        // Mostra a mensagem do usuário
+        const msgUser = document.createElement("div");
+        msgUser.className = "mensagem usuario";
+        msgUser.textContent = mensagem;
+        historico.appendChild(msgUser);
 
-            try {
-                resultadoDiv.textContent = "Convertendo...";
-                
-                // 3. Faz a requisição HTTP (usando fetch)
-                const response = await fetch(apiUrl);
-                
-                // 4. Converte a resposta JSON em um objeto JavaScript
-                const dados = await response.json();
+        // Limpa o input
+        input.value = "";
 
-                // 5. Verifica se a API retornou um erro
-                if (!response.ok) {
-                    resultadoDiv.textContent = `Erro do Servidor: ${dados.detail}`;
-                    return;
-                }
+        try {
+            // Envia a mensagem para a API FastAPI
+            const response = await fetch(API_URL, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({ texto: mensagem })
+            });
 
-                // 6. Exibe o resultado na tela
-                const celsius = dados.temperatura_celsius;
-                resultadoDiv.textContent = `Resultado: ${celsius} C°`;
+            const data = await response.json();
 
-            } catch (error) {
-                // Captura erros de rede (ex: servidor Python não está rodando)
-                resultadoDiv.textContent = 'Erro ao conectar com a API. Verifique se o Uvicorn está rodando.';
-                console.error('Erro de requisição:', error);
-            }
+            // Exibe a resposta do assistente
+            const msgBot = document.createElement("div");
+            msgBot.className = "mensagem assistente";
+            msgBot.textContent = data.resposta || "Ocorreu um erro na resposta.";
+            historico.appendChild(msgBot);
+
+            historico.scrollTop = historico.scrollHeight;
+
+        } catch (error) {
+            console.error("Erro na requisição:", error);
+            const msgErro = document.createElement("div");
+            msgErro.className = "mensagem assistente";
+            msgErro.textContent = "⚠️ Erro ao se comunicar com o servidor.";
+            historico.appendChild(msgErro);
         }
-    </script>
+    }
+</script>
+
 </body>
 </html>
