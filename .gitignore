@@ -1,0 +1,22 @@
+# Ambientes Virtuais do Python
+venv
+.venv
+
+# Caches do Python
+__pycache__
+.pyc
+
+# Arquivos de IDEs (ex VSCode)
+.vscode
+.idea
+
+# Arquivos de Log
+.log
+.log
+
+# Arquivos de Sistema Operacional
+.DS_Store
+Thumbs.db
+
+# Arquivos de dependências (se você usar)
+node_modules

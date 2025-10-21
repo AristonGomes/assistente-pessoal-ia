@@ -38,7 +38,6 @@ async def startup_event():
 class UserInput(BaseModel):
     texto: str
 
-
 # ----------------------------------------------------
 # 4. Rota Inteligente (O Cérebro do Assistente)
 # ----------------------------------------------------
