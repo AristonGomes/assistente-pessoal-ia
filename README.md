@@ -42,18 +42,18 @@ Siga os passos abaixo na raiz do projeto (`assistente-pessoal-ia/`):
 
 ### 1. Configuração do Ambiente
 
-1. **Ative o ambiente virtual:**
+   **Ative o ambiente virtual:**
    ```bash
    .\venv\Scripts\Activate.ps1
-
-2. **Instale as dependências**
+   ```
+   **Instale as dependências**
    ```bash
    pip install -r requirements.txt
-
-3. **Baixe os recursos NLP (stopwords):**
+   ```
+   **Baixe os recursos NLP (stopwords):**
    ```bash
    python -c "import nltk; nltk.download('stopwords')"
-
+   ```
 ---
 
 ### 2. Iniciar o Backend
