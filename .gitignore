@@ -6,6 +6,11 @@ venv
 __pycache__
 .pyc
 
+# Configuração sensível (Variáveis de ambiente)
+.env
+.env.local
+.env.*.local
+
 # Arquivos de IDEs (ex VSCode)
 .vscode
 .idea
@@ -17,6 +22,10 @@ __pycache__
 # Arquivos de Sistema Operacional
 .DS_Store
 Thumbs.db
+
+# Histórico de sessões (local)
+sessions/
+*.json.bak
 
 # Arquivos de dependências (se você usar)
 node_modules

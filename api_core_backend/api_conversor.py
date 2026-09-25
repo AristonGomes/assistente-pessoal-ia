@@ -1,16 +1,43 @@
+"""
+API Backend do Assistente Pessoal com IA (Gemini)
+==================================================
+
+Backend FastAPI que integra:
+- AssistantBrain: Inteligência com Gemini API
+- Skills: Detecção de intenção e roteamento
+- Gerenciamento de sessões de conversa
+- Retrocompatibilidade com endpoints antigos
+
+Versão: 2.0 (com IA integrada)
+Autor: Ariston Gomes
+"""
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel # Para definir o formato da requisição POST
-from api_core_backend.utils.text_processor import TextCleaner # << Importa nosso módulo de limpeza
+from pydantic import BaseModel
+from typing import Optional, Dict
+from datetime import datetime
 import uvicorn
 import re
+import uuid
 
-# ----------------------------------------------------
-# 1. Setup Básico
-# ----------------------------------------------------
-app = FastAPI()
+from api_core_backend.gemini_brain import AssistantBrain
+from api_core_backend.skills import detectar_e_processar
 
-nlp_cleaner: TextCleaner # Variável global para a ferramenta de NLP
+# ============================================================================
+# CONFIGURAÇÃO BÁSICA
+# ============================================================================
+
+app = FastAPI(title="Assistente Pessoal com IA", version="2.0")
+
+# Variável global para o brain (singleton)
+assistant_brain: Optional[AssistantBrain] = None
+
+# Gerenciador de sessões (session_id -> historico)
+sessions: Dict[str, dict] = {}
+
+VERSION = "2.0"
+IA_DISPONIVEL = False
 
 # Configuração CORS (Permite que o Frontend se conecte)
 app.add_middleware(
@@ -21,79 +48,451 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 2. Inicializa Ferramentas de NLP
-# A classe TextCleaner é carregada na memória uma única vez
+# ============================================================================
+# MODELOS PYDANTIC
+# ============================================================================
 
-# Função de Inicialização (Executa APENAS quando o servidor inicia)
+class ChatRequest(BaseModel):
+    """Modelo para requisições de chat"""
+    mensagem: str
+    session_id: Optional[str] = None
+
+class ChatResponse(BaseModel):
+    """Modelo para respostas de chat"""
+    resposta: str
+    skill_usada: str
+    tokens_entrada: int
+    tokens_saida: int
+    session_id: str
+    total_mensagens: int
+    timestamp: str
+
+class HealthResponse(BaseModel):
+    """Modelo para resposta de health check"""
+    status: str
+    ia_disponivel: bool
+    versao: str
+
+class StatsResponse(BaseModel):
+    """Modelo para estatísticas da sessão"""
+    total_mensagens: int
+    tokens_entrada: int
+    tokens_saida: int
+    total_tokens: int
+    primeira_mensagem: Optional[str]
+    ultima_mensagem: Optional[str]
+    duracao_minutos: float
+
+# ============================================================================
+# INICIALIZAÇÃO
+# ============================================================================
+
 @app.on_event("startup")
 async def startup_event():
-    global nlp_cleaner
-    print("INFO: Inicializando módulo TextCleaner...")
-    # Inicializa a ferramenta APÓS o carregamento do ambiente
-    nlp_cleaner = TextCleaner() 
-    print("INFO: TextCleaner carregado com sucesso.")
+    """Inicializa o brain (AssistantBrain) e carrega configurações"""
+    global assistant_brain, IA_DISPONIVEL
+    
+    print("\n" + "="*60)
+    print("🚀 Inicializando Assistente Pessoal com IA")
+    print("="*60 + "\n")
+    
+    try:
+        print("🧠 Carregando AssistantBrain (Gemini)...")
+        assistant_brain = AssistantBrain()
+        IA_DISPONIVEL = True
+        print("✅ AssistantBrain carregado com sucesso!\n")
+    except Exception as e:
+        print(f"❌ Erro ao inicializar AssistantBrain: {e}")
+        print("⚠️ IA não disponível. Endpoints de chat não funcionarão.\n")
+        IA_DISPONIVEL = False
 
-# 3. Modelo Pydantic para a Requisição POST
-# Define o contrato de dados: a API espera um JSON com a chave 'texto'
 class UserInput(BaseModel):
+    """Compatibilidade com versão antiga"""
     texto: str
 
-# ----------------------------------------------------
-# 4. Rota Inteligente (O Cérebro do Assistente)
-# ----------------------------------------------------
-@app.post("/assistente")
-def handle_assistant_request(input_data: UserInput):
+# ============================================================================
+# ENDPOINTS - HEALTH CHECK
+# ============================================================================
+
+@app.get("/", response_model=HealthResponse)
+async def health_check():
     """
-    Endpoint principal do assistente. Recebe um texto e decide a ação.
+    Health check básico da API.
+    Verifica se o servidor está rodando e se a IA está disponível.
     """
-    texto_bruto = input_data.texto
+    return HealthResponse(
+        status="online" if assistant_brain else "offline",
+        ia_disponivel=IA_DISPONIVEL,
+        versao=VERSION
+    )
+
+@app.get("/health", response_model=HealthResponse)
+async def health_detailed():
+    """
+    Health check detalhado com informações sobre a IA.
+    """
+    return HealthResponse(
+        status="online" if assistant_brain else "offline",
+        ia_disponivel=IA_DISPONIVEL,
+        versao=VERSION
+    )
+
+# ============================================================================
+# ENDPOINTS - CHAT COM IA (NOVOS)
+# ============================================================================
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    """
+    Endpoint principal: entra com IA integrada.
     
-    # --- Lógica de Intenção Rudimentar (Commit 3) ---
+    Fluxo:
+    1. Recebe mensagem e session_id (opcional)
+    2. Detecta skill via skills.detectar_e_processar()
+    3. Processa via AssistantBrain
+    4. Gerencia histórico de sessão
+    5. Retorna resposta com metadados
     
-    # 1. Limpar e padronizar o texto para análise
-    texto_limpo = nlp_cleaner.clean(texto_bruto)
+    Request:
+        mensagem: str - Mensagem do usuário
+        session_id: str (opcional) - ID da sessão para histórico contínuo
     
-    # 2. DECISÃO: Se o usuário quer apenas limpar o texto
-    if "limpar" in texto_limpo:
-        # Retorna o resultado da limpeza
-        return {
-            "status": "sucesso",
-            "acao": "limpeza_texto",
-            "resposta": f"Entendido! O texto limpo é: '{texto_limpo}'"
+    Response:
+        resposta: str - Resposta da IA
+        skill_usada: str - Qual skill foi acionada ("resumir", "traduzir", etc)
+        tokens_entrada: int - Tokens usados de entrada
+        tokens_saida: int - Tokens usados de saída
+        session_id: str - ID da sessão
+        total_mensagens: int - Total de mensagens nesta sessão
+        timestamp: str - Data/hora do processamento
+    """
+    
+    if not IA_DISPONIVEL or not assistant_brain:
+        return ChatResponse(
+            resposta="❌ IA não está disponível. Verifique a chave de API.",
+            skill_usada="nenhuma",
+            tokens_entrada=0,
+            tokens_saida=0,
+            session_id="erro",
+            total_mensagens=0,
+            timestamp=datetime.now().isoformat()
+        )
+    
+    # Cria ou recupera session_id
+    session_id = request.session_id or str(uuid.uuid4())
+    
+    if session_id not in sessions:
+        sessions[session_id] = {
+            "mensagens": [],
+            "criada_em": datetime.now().isoformat()
         }
     
-    # 3. DECISÃO: Se o usuário quer converter temperatura
-    elif "graus" in texto_limpo or "fahrenheit" in texto_limpo:
-        # Tentativa de extrair o número (Lógica será aprimorada futuramente)
-        try:
-            # Pega o primeiro número que encontrar no texto original (assumindo que é o F°)
-            temp_f = float(re.findall(r'\d+\.?\d*', texto_bruto)[0])
+    try:
+        # Detecta skill e processa
+        resultado = detectar_e_processar(request.mensagem, assistant_brain)
+        
+        # Adiciona ao histórico da sessão
+        sessions[session_id]["mensagens"].append({
+            "role": "usuario",
+            "conteudo": request.mensagem,
+            "timestamp": datetime.now().isoformat()
+        })
+        sessions[session_id]["mensagens"].append({
+            "role": "assistente",
+            "conteudo": resultado["resposta"],
+            "skill": resultado["skill_usada"],
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        return ChatResponse(
+            resposta=resultado["resposta"],
+            skill_usada=resultado["skill_usada"],
+            tokens_entrada=resultado["tokens_entrada"],
+            tokens_saida=resultado["tokens_saida"],
+            session_id=session_id,
+            total_mensagens=len([m for m in sessions[session_id]["mensagens"] if m["role"] == "usuario"]),
+            timestamp=datetime.now().isoformat()
+        )
+    
+    except Exception as e:
+        print(f"❌ Erro ao processar chat: {e}")
+        return ChatResponse(
+            resposta=f"Desculpe, ocorreu um erro: {str(e)}",
+            skill_usada="nenhuma",
+            tokens_entrada=0,
+            tokens_saida=0,
+            session_id=session_id,
+            total_mensagens=len([m for m in sessions[session_id]["mensagens"] if m["role"] == "usuario"]),
+            timestamp=datetime.now().isoformat()
+        )
+
+@app.post("/chat/limpar")
+async def limpar_chat(request: ChatRequest):
+    """
+    Limpa o histórico de conversa de uma sessão.
+    
+    Request:
+        session_id: str - ID da sessão a limpar
+    
+    Response:
+        status: str
+        mensagem: str
+        mensagens_limpas: int
+    """
+    
+    if not IA_DISPONIVEL or not assistant_brain:
+        return {
+            "status": "erro",
+            "mensagem": "IA não está disponível",
+            "mensagens_limpas": 0
+        }
+    
+    session_id = request.session_id
+    
+    if not session_id or session_id not in sessions:
+        return {
+            "status": "erro",
+            "mensagem": f"Sessão {session_id} não encontrada",
+            "mensagens_limpas": 0
+        }
+    
+    try:
+        # Limpa o histórico do brain
+        resultado_brain = assistant_brain.limpar_historico()
+        
+        # Limpa o histórico da sessão
+        mensagens_limpas = len(sessions[session_id]["mensagens"])
+        sessions[session_id]["mensagens"] = []
+        
+        return {
+            "status": "sucesso",
+            "mensagem": "Histórico limpo com sucesso",
+            "mensagens_limpas": mensagens_limpas // 2
+        }
+    
+    except Exception as e:
+        print(f"❌ Erro ao limpar histórico: {e}")
+        return {
+            "status": "erro",
+            "mensagem": str(e),
+            "mensagens_limpas": 0
+        }
+
+@app.get("/chat/historico")
+async def obter_historico(session_id: str):
+    """
+    Retorna o histórico completo de uma sessão.
+    
+    Query (URL):
+        session_id: str - ID da sessão
+    
+    Response:
+        historico: list[dict] - Lista de mensagens com role, conteúdo e timestamp
+        total_mensagens: int
+        session_id: str
+        criada_em: str
+    """
+    
+    if session_id not in sessions:
+        return {
+            "status": "erro",
+            "mensagem": f"Sessão {session_id} não encontrada",
+            "historico": []
+        }
+    
+    sessionData = sessions[session_id]
+    
+    return {
+        "status": "sucesso",
+        "session_id": session_id,
+        "criada_em": sessionData["criada_em"],
+        "historico": sessionData["mensagens"],
+        "total_mensagens": len([m for m in sessionData["mensagens"] if m["role"] == "usuario"])
+    }
+
+@app.get("/chat/stats")
+async def obter_stats(session_id: Optional[str] = None):
+    """
+    Retorna estatísticas da sessão atual.
+    
+    Query (URL):
+        session_id: str (opcional) - Se não fornecido, retorna stats do brain
+    
+    Response:
+        total_mensagens: int
+        tokens_entrada: int
+        tokens_saida: int
+        total_tokens: int
+        primeira_mensagem: str (ISO format)
+        ultima_mensagem: str (ISO format)
+        duracao_minutos: float
+    """
+    
+    if not IA_DISPONIVEL or not assistant_brain:
+        return {
+            "status": "erro",
+            "mensagem": "IA não está disponível"
+        }
+    
+    try:
+        # Se session_id fornecido, retorna stats daquela sessão
+        if session_id and session_id in sessions:
+            sessionData = sessions[session_id]
+            mensagens = [m for m in sessionData["mensagens"] if m["role"] == "usuario"]
             
-            # Fórmula de conversão: (F - 32) * 5/9
-            temp_c = (temp_f - 32) * 5/9
+            primeira = mensagens[0]["timestamp"] if mensagens else None
+            ultima = mensagens[-1]["timestamp"] if mensagens else None
             
             return {
                 "status": "sucesso",
-                "acao": "conversao_temperatura",
-                "resposta": f"A temperatura de {temp_f}°F é igual a {round(temp_c, 2)}°C."
+                "total_mensagens": len(mensagens),
+                "primeira_mensagem": primeira,
+                "ultima_mensagem": ultima,
+                "duracao_minutos": 0
             }
-        except:
-            return {"status": "erro", "resposta": "Não consegui extrair a temperatura para conversão."}
-
-
-    # 4. DECISÃO: Resposta padrão
-    else:
+        
+        # Senão, retorna stats do brain
+        stats_brain = assistant_brain.get_stats()
         return {
             "status": "sucesso",
-            "acao": "resposta_padrao",
-            "resposta": f"Olá! Não entendi sua intenção, mas você disse: '{texto_bruto}'"
+            **stats_brain
+        }
+    
+    except Exception as e:
+        return {
+            "status": "erro",
+            "mensagem": str(e)
         }
 
-# ----------------------------------------------------
-# Rota de Teste e Conversão Antigas (REMOVIDAS/COMENTADAS para focar na rota /assistente)
-# Opcionalmente, você pode deixar o @app.get("/") para fins de teste.
-@app.get("/")
-def home():
-    """Endpoint principal para verificar se a API está ativa."""
-    return {"message": "API do Assistente Pessoal Ativa (Use a rota /assistente POST)."}
-# ----------------------------------------------------
+# ============================================================================
+# ENDPOINTS - COMPATIBILIDADE (ANTIGOS, REFATORADOS COM IA)
+# ============================================================================
+
+@app.post("/processar-texto")
+async def processar_texto(input_data: UserInput):
+    """
+    Endpoint legado: processa texto.
+    
+    Antes: Usava limpeza com NLTK
+    Agora: Usa IA do Gemini para análise mais inteligente
+    
+    Request:
+        texto: str
+    
+    Response:
+        status: str
+        acao: str
+        resposta: str
+    """
+    
+    if not IA_DISPONIVEL or not assistant_brain:
+        return {
+            "status": "erro",
+            "acao": "processamento_texto",
+            "resposta": "IA não disponível"
+        }
+    
+    try:
+        # Prompt para análise de texto
+        prompt = f"""Analise o seguinte texto e forneça:
+1. Um resumo breve
+2. Principais palavras-chave
+3. Tom/sentimento geral
+
+Texto: {input_data.texto}
+
+Responda de forma concisa e clara."""
+        
+        resultado = assistant_brain.processar(prompt)
+        
+        return {
+            "status": "sucesso",
+            "acao": "processamento_texto",
+            "resposta": resultado["resposta"]
+        }
+    
+    except Exception as e:
+        return {
+            "status": "erro",
+            "acao": "processamento_texto",
+            "resposta": str(e)
+        }
+
+@app.post("/converter-temperatura")
+async def converter_temperatura(input_data: UserInput):
+    """
+    Endpoint legado: converte temperatura.
+    
+    Mantém a lógica matemática original (não precisa de IA).
+    
+    Request:
+        texto: str (ex: "converter 72F para Celsius")
+    
+    Response:
+        status: str
+        acao: str
+        resposta: str
+    """
+    
+    try:
+        # Tenta extrair números do texto
+        numeros = re.findall(r'-?\d+\.?\d*', input_data.texto)
+        
+        if not numeros:
+            return {
+                "status": "erro",
+                "acao": "conversao_temperatura",
+                "resposta": "Não consegui encontrar uma temperatura no seu texto."
+            }
+        
+        temp_valor = float(numeros[0])
+        
+        # Detecta unidade de origem
+        texto_lower = input_data.texto.lower()
+        
+        if "fahrenheit" in texto_lower or "f" in texto_lower or "°f" in texto_lower:
+            # F para C
+            temp_convertida = (temp_valor - 32) * 5/9
+            unidade_origem = "°F"
+            unidade_destino = "°C"
+        elif "celsius" in texto_lower or "c" in texto_lower or "°c" in texto_lower:
+            # C para F
+            temp_convertida = (temp_valor * 9/5) + 32
+            unidade_origem = "°C"
+            unidade_destino = "°F"
+        else:
+            return {
+                "status": "erro",
+                "acao": "conversao_temperatura",
+                "resposta": "Especifique se é Fahrenheit (F) ou Celsius (C)."
+            }
+        
+        resposta = f"{temp_valor}{unidade_origem} = {round(temp_convertida, 2)}{unidade_destino}"
+        
+        return {
+            "status": "sucesso",
+            "acao": "conversao_temperatura",
+            "resposta": resposta
+        }
+    
+    except Exception as e:
+        return {
+            "status": "erro",
+            "acao": "conversao_temperatura",
+            "resposta": f"Erro na conversão: {str(e)}"
+        }
+
+# ============================================================================
+# ENDPOINT LEGADO (ANTIGO - MANTIDO PARA COMPATIBILIDADE)
+# ============================================================================
+
+@app.post("/assistente")
+async def handle_assistant_request(input_data: UserInput):
+    """
+    Endpoint antigo do assistente.
+    Agora redireciona para o novo sistema com IA.
+    
+    ⚠️ DESCONTINUADO: Use /chat em vez disso.
+    """
+    request = ChatRequest(mensagem=input_data.texto)
+    return await chat(request)
